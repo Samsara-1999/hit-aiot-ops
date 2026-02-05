@@ -989,6 +989,7 @@ func (c *Controller) ReceiveMetrics(ctx *gin.Context) {
 - `scripts/deploy_controller.sh` - 部署控制器（示例）
 - `scripts/deploy_hook.sh` - 部署bash hook
 - `scripts/check_status.sh` - 检查系统状态
+- `scripts/build_linux.sh` - 构建 Linux 可部署二进制
 
 ### 8.5 用户工具
 - `tools/check_quota.sh` - Bash hook脚本
