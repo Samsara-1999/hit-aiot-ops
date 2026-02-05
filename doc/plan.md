@@ -2,7 +2,7 @@
 
 ## 0. 当前实现状态（代码落地，2026-02-05）
 
-说明：本仓库已把“阶段 1（核心组件）”落地为可运行代码，并补齐 CPU 计费与控制；其余阶段（如完整 Vue Web、监控栈、真实排队分配、支付对接、高可用）属于上线增强项，需要按实际资源与优先级继续推进。
+说明：本仓库已把“阶段 1（核心组件）”落地为可运行代码，并补齐 CPU 计费与控制；其余阶段（如真实排队分配、支付对接、高可用、完整监控栈）属于上线增强项，需要按实际资源与优先级继续推进。
 
 ### 已实现（可用于试点/全量上线的核心闭环）
 1. 节点 Agent（Golang）：采集 GPU 计算进程（`nvidia-smi`）与 CPU 占用（按进程采样差分），每分钟上报到控制器
@@ -10,7 +10,7 @@
 3. 控制器（Golang + Gin）：接收上报、落库、计费（GPU + CPU）、更新余额/状态、下发动作（通知/限制/终止/CPU 限流）
 4. CPU 控制三段兜底：优先 `systemd CPUQuota`，其次 `cgroup v2 cpu.max`，最后 `cgroup v1 cpu.cfs_*`（兼容无法升级到 cgroup v2 的机器）
 5. Bash Hook：在用户启动“疑似 GPU 任务”前检查余额状态（尽量不误伤）
-6. 最小可用 Web 管理页：控制器直接提供静态页（无需前端构建）用于查看余额/用户/价格/使用记录/排队队列
+6. Web 管理界面（Vue3 + TypeScript + Element Plus）：`pnpm build` 输出到 `web/dist/`，由控制器直接托管（无需单独前端服务）
 7. 节点状态：控制器落库 nodes 表，可通过管理员接口查看节点在线/上报情况
 8. 使用记录 CSV 导出：管理员接口支持导出 CSV 便于对账与计费归档
 9. 数据库迁移脚本：`database/migrations/`（含幂等表与 nodes 表）
@@ -19,11 +19,11 @@
 - `docs/runbook.md`（一步步上线运行手册）
 
 ### 未实现/待增强（不影响核心闭环上线，但建议排期）
-1. 完整的 Vue + Element Plus Web（当前为最小静态管理页）
+1. 更完善的权限体系：登录/会话/JWT/RBAC（当前前端通过填写 admin token 调用管理员接口）
 2. 真实 GPU 资源排队与分配（当前仅记录排队，不做分配）
 3. 通知渠道（邮件/企业微信/飞书）与支付对接
 4. 监控栈（Prometheus/Grafana/DCGM Exporter）与告警规则
-5. 控制器高可用（主备/负载均衡）与更细粒度的权限体系（JWT/RBAC）
+5. 控制器高可用（主备/负载均衡）
 
 ## 一、需求总结
 
@@ -1002,7 +1002,9 @@ func (c *Controller) ReceiveMetrics(ctx *gin.Context) {
 - `tools/balance-query` - 余额查询工具
 
 ### 8.6 Web界面
-- `web/dist/` - 最小可用静态管理页（无需构建，控制器直接服务）
+- `web/src/` - Vue3 + TypeScript 源码（Element Plus）
+- `web/package.json` - 前端依赖与脚本（pnpm）
+- `web/dist/` - 构建产物（控制器直接托管）
 
 ### 8.7 配置文件
 - `config/controller.yaml` - 控制器配置
