@@ -1,105 +1,100 @@
-# hit-aiot-ops（GPU 集群管理：轻量 Agent + 控制器）
+# HIT-AIOT-OPS
 
-本仓库实现 `docs/plan.md` 中“阶段 1：核心组件（节点 Agent + 控制器 + 计费/配额）”的可运行版本：
+轻量 GPU 集群运维平台：保留 SSH 使用习惯，后台完成监控、计费、配额控制、账号映射与管理。
 
-- 节点侧：`node-agent/`（Golang）每分钟采集 GPU 计算进程并上报
-- 控制器：`controller/`（Golang + Gin + PostgreSQL）接收上报、落库、计费（GPU + CPU）、下发限制动作（含 CPU 限流）
-- 用户侧：`tools/check_quota.sh`（Bash Hook）在用户启动疑似 GPU 任务前检查余额状态
+## 功能概览
 
-## 日常启动
+- **节点 Agent（Go）**：每分钟采集 GPU/CPU 进程并上报控制器
+- **控制器（Go + Gin + PostgreSQL）**：落库、计费、限制动作下发、管理 API
+- **Web 管理端（Vue3）**：管理员与普通用户分角色界面
+- **用户能力**：注册、登录、找回密码、修改密码、查询个人余额/用量、管理个人服务器账号映射
+- **管理员能力**：运营看板、节点状态、价格配置、注册审核、账号映射管理、SSH 白名单、邮件配置与测试发送
+
+---
+
+## 🚀 快速开始（本机）
+
+### 🧰 0) 安装依赖（Ubuntu 22.04，清华源优先，固定版本）
+
+> 建议先配置 apt 为清华源，再安装基础依赖；以下版本为本项目推荐固定版本。
+
 ```bash
-cd controller
-go test ./...
-go run . --config ../config/controller.yaml
-cd ../web
-pnpm build
+cd /home/baojh/hit-aiot-ops
+bash scripts/install_deps_ubuntu2204.sh
 ```
 
-## 快速开始（本机开发）
-
-### 0) 依赖下载（网络受限场景）
-
-如果你所在网络无法访问 `proxy.golang.org` / `golang.org`，建议临时使用国内 Go Proxy：
+可选参数（示例）：
 
 ```bash
-# Go Ubuntu配置
-set -e
+# 跳过 Docker
+INSTALL_DOCKER=0 bash scripts/install_deps_ubuntu2204.sh
 
-# 1) 下载 Go 1.22.5（清华不行就自动换阿里/腾讯）
+# 指定版本
+GO_VERSION=1.22.5 NODE_MAJOR=20 PNPM_VERSION=10.28.2 bash scripts/install_deps_ubuntu2204.sh
+```
+
+脚本等价于下方手动步骤，若你想逐条执行可继续参考：
+
+```bash
+# 0.1 切换 apt 清华源（Ubuntu 22.04 / jammy）
+sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%s)
+sudo tee /etc/apt/sources.list >/dev/null <<'EOF'
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy main restricted universe multiverse
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-updates main restricted universe multiverse
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-backports main restricted universe multiverse
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-security main restricted universe multiverse
+EOF
+
+# 0.2 基础依赖
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+  ca-certificates curl wget git jq build-essential docker.io docker-compose-plugin
+
+# 0.3 安装 Go 1.22.5（清华失败自动切阿里/腾讯）
 cd /tmp
 rm -f go.tgz
 wget -O go.tgz https://mirrors.tuna.tsinghua.edu.cn/golang/go1.22.5.linux-amd64.tar.gz \
 || wget -O go.tgz https://mirrors.aliyun.com/golang/go1.22.5.linux-amd64.tar.gz \
 || wget -O go.tgz https://mirrors.cloud.tencent.com/golang/go1.22.5.linux-amd64.tar.gz
-
-# 2) 安装到 /usr/local/go
 sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf /tmp/go.tgz
-
-# 3) 配 PATH（系统级 + 当前 shell 立即生效）
 echo 'export PATH=/usr/local/go/bin:$PATH' | sudo tee /etc/profile.d/go.sh >/dev/null
 export PATH=/usr/local/go/bin:$PATH
 grep -q '/usr/local/go/bin' ~/.bashrc || echo 'export PATH=/usr/local/go/bin:$PATH' >> ~/.bashrc
-source ~/.bashrc
 hash -r
+go version   # 期望：go1.22.5
 
-# 4) 验证
-which go
-go version
+# 0.4 安装 Node 20 + pnpm 10.28.2
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo corepack enable
+corepack prepare pnpm@10.28.2 --activate
+node -v      # 期望：v20.x
+pnpm -v      # 期望：10.28.2
 
-export GOPROXY=https://goproxy.cn,direct
-export GOSUMDB=off
+# 0.5 Go 网络建议（国内）
+go env -w GOPROXY=https://goproxy.cn,direct
+go env -w GOSUMDB=off
 ```
 
-### 1) 启动 PostgreSQL（可选：使用 docker compose）
+### 🗄️ 1) 启动 PostgreSQL
 
 ```bash
-cd /Volumes/disk/hit-aiot-ops
-export POSTGRES_IMAGE="docker.m.daocloud.io/library/postgres:18.1"
+cd /home/baojh/hit-aiot-ops
 docker-compose up -d
 
-# check是否成功
 docker-compose ps -a
 docker-compose logs --tail=200 postgres
 ```
 
-默认会创建数据库 `gpuops`，用户名/密码均为 `gpuops`，端口 `5432`。
+默认数据库：`gpuops`，账号密码：`gpuops/gpuops`，端口：`5432`。
 
-### 2) 启动控制器
+### 🧠 2) 启动控制器
 
 ```bash
-cd controller
-go test ./...
+cd /home/baojh/hit-aiot-ops/controller
 go run . --config ../config/controller.yaml
 ```
-
-（可选但推荐）构建前端，让控制器托管完整 Web 管理端：
-
-```bash
-# 1) 清理旧 node（可选但建议）
-sudo apt remove -y nodejs npm || true
-sudo apt remove -y libnode-dev
-
-# 2) 装 Node 20（NodeSource）
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# 3) 验证
-node -v
-npm -v
-
-# 4) 用 corepack 安装 pnpm
-sudo corepack enable
-corepack prepare pnpm@9.15.2 --activate
-pnpm -v
-
-cd web
-pnpm config set registry https://registry.npmmirror.com
-pnpm install
-pnpm build
-```
-
-注意：控制器启动时才会探测 `web/dist/`，因此建议先构建前端再启动控制器；如果你是启动后才构建，请重启控制器。
 
 健康检查：
 
@@ -107,118 +102,172 @@ pnpm build
 curl -s http://127.0.0.1:8000/healthz
 ```
 
-监控指标：
-- `http://127.0.0.1:8000/metrics`
-
-Web 管理页：
-- 浏览器打开 `http://127.0.0.1:8000/`
-- 需要先创建管理员账号并在 `/login` 登录（详见 `docs/runbook.md`）
-
-开发环境快速初始化管理员账号（只需做一次）：
+### 🖥️ 3) 构建前端（首次或前端改动后）
 
 ```bash
-curl -fsS -H "Authorization: Bearer dev-admin-token" \
+cd /home/baojh/hit-aiot-ops/web
+pnpm install
+pnpm build
+```
+
+说明：控制器只托管 `web/dist`，前端改动后需重新 `pnpm build`，然后重启控制器。
+
+### 🔐 4) 初始化管理员账号（仅首次）
+
+```bash
+# admin_token 请从 config/controller.yaml 读取
+curl -fsS -H "Authorization: Bearer <admin_token>" \
   -H "Content-Type: application/json" \
   -X POST http://127.0.0.1:8000/api/admin/bootstrap \
   -d '{"username":"admin","password":"ChangeMe_123456"}'
 ```
 
-然后访问：
-- `http://127.0.0.1:8000/login`
+登录地址：`http://127.0.0.1:8000/login`
 
-### 3) 启动节点 Agent（同机模拟）
+### 🤖 5) 本机模拟启动 Agent
 
 ```bash
-cd node-agent
-go test ./...
-# 约定：NODE_ID 使用机器编号（推荐直接使用端口号，例如 60000）
-NODE_ID=60000 CONTROLLER_URL=http://127.0.0.1:8000 AGENT_TOKEN=dev-agent-token go run .
+cd /home/baojh/hit-aiot-ops/node-agent
+NODE_ID=60000 \
+CONTROLLER_URL=http://192.168.1.244:8000 \
+AGENT_TOKEN=<agent_token> \
+go run .
 ```
 
-说明：
-- 没有 NVIDIA 驱动或没有 `nvidia-smi` 时，Agent 仍会心跳上报与 CPU 计费/控制（但不会上报 GPU 进程）。
-- CPU 控制优先使用 `systemd CPUQuota`；否则按 `cgroup v2` 再到 `cgroup v1(cpu.cfs_*)` 兜底。
-- 为防止网络重试导致重复扣费，Agent 每次上报携带 `report_id`，控制器做幂等去重。
+`AGENT_TOKEN` 必须与 `config/controller.yaml` 的 `agent_token` 一致。
 
-## API 速查
+---
 
-- `POST /api/metrics`（Agent 上报；需要 `X-Agent-Token`）
-- `GET /api/users/:username/balance`（积分/余额查询；用于 Hook）
-- `GET /api/users/:username/usage`（用户使用记录）
-- `POST /api/users/:username/recharge`（充值；需要 `Authorization: Bearer <adminToken>`）
-- `POST /api/requests/bind`（用户绑定登记；需审核）
-- `POST /api/requests/open`（用户开号申请；需审核）
-- `GET /api/admin/requests`（管理员查看申请）
-- `GET /api/admin/users`（管理员查询；需要管理员 token）
-- `POST /api/admin/prices`（设置 GPU 单价；需要管理员 token）
-- `GET /api/admin/usage`（管理员查询使用记录）
-- `GET /api/admin/gpu/queue`（管理员查看排队）
-
-更完整的字段说明见：`docs/api-reference.md`。
-
-## 文档
-
-- `docs/plan.md`：总体方案与实现对照
-- `docs/api-reference.md`：API 参考
-- `docs/user-guide.md`：用户指南
-- `docs/admin-guide.md`：管理员指南
-- `docs/go-live-checklist.md`：上线检查清单
-- `docs/runbook.md`：一步步上线运行手册
-
-## 测试说明
-
-本仓库为多 Go module（`controller/`、`node-agent/`），请在仓库根目录按如下方式运行测试：
+## 🔁 日常启动（开发环境）
 
 ```bash
+# 1) 数据库
+cd /home/baojh/hit-aiot-ops
+docker-compose up -d
+
+# 2) 控制器
+cd /home/baojh/hit-aiot-ops/controller
+go run . --config ../config/controller.yaml
+
+# 3) Agent（如未用 systemd 托管）
+cd /home/baojh/hit-aiot-ops/node-agent
+NODE_ID=60000 CONTROLLER_URL=http://127.0.0.1:8000 AGENT_TOKEN=<agent_token> go run .
+```
+
+> `pnpm build` 不需要每次开机执行，只有前端代码变更后需要。
+
+---
+
+## 🧩 计算节点部署（Ubuntu 22.04，支持 sudo）
+
+### 🛠️ 1) 在控制器机编译 agent
+
+```bash
+cd /home/baojh/hit-aiot-ops/node-agent
+go build -o node-agent .
+```
+
+### 🚚 2) 批量部署
+
+```bash
+cd /home/baojh/hit-aiot-ops
+
+AGENT_BIN=./node-agent/node-agent \
+AGENT_TOKEN='<agent_token>' \
+CONTROLLER_URL='http://<controller-ip>:8000' \
+SSH_USER=ubuntu \
+INSTALL_PREREQS=1 \
+INSTALL_GO=0 \
+NODES='60000:192.168.1.104 60001:192.168.1.220' \
+bash scripts/deploy_agent.sh
+```
+
+### 🛡️ 3) 可选：启用 SSH Guard（未登记限制登录）
+
+```bash
+ENABLE_SSH_GUARD=1 \
+SSH_GUARD_EXCLUDE_USERS='root ubuntu' \
+SSH_GUARD_FAIL_OPEN=1 \
+AGENT_BIN=./node-agent/node-agent \
+AGENT_TOKEN='<agent_token>' \
+CONTROLLER_URL='http://<controller-ip>:8000' \
+SSH_USER=ubuntu \
+NODES='60000:192.168.1.104' \
+bash scripts/deploy_agent.sh
+```
+
+### ✅ 4) 节点状态检查
+
+```bash
+sudo systemctl status gpu-node-agent
+sudo journalctl -u gpu-node-agent -n 100 --no-pager
+```
+
+---
+
+## 🧭 主要页面
+
+- 登录：`/login`
+- 用户注册：`/register`
+- 找回密码：`/forgot-password`
+- 管理员运营看板：`/admin/board`
+- 节点状态：`/admin/nodes`
+- 账号映射管理：`/admin/accounts`、`/user/accounts`
+- SSH 白名单：`/admin/whitelist`
+- 邮件设置与测试发送：`/admin/mail`
+
+---
+
+## 🔌 API 速查
+
+- Agent 上报：`POST /api/metrics`
+- 用户自助：`POST /api/auth/register`、`POST /api/auth/forgot-password`、`POST /api/auth/reset-password`
+- 登录会话：`POST /api/auth/login`、`GET /api/auth/me`、`POST /api/auth/change-password`
+- 用户查询：`GET /api/user/me/balance`、`GET /api/user/me/usage`
+- 账号映射：
+  - 用户：`GET/POST/PUT/DELETE /api/user/accounts`
+  - 管理员：`GET/POST/PUT/DELETE /api/admin/accounts`
+- 白名单：`GET/POST/DELETE /api/admin/whitelist`
+- 运营统计：`GET /api/admin/stats/users`、`GET /api/admin/stats/monthly`、`GET /api/admin/stats/recharges`
+- 邮件：`GET/POST /api/admin/mail/settings`、`POST /api/admin/mail/test`
+
+完整字段说明见：`docs/api-reference.md`
+
+---
+
+## 🧪 测试与构建
+
+```bash
+# Go 测试（多模块）
 go test ./controller/... ./node-agent/...
+
+# 前端构建
+cd web && pnpm build
 ```
 
-CI（GitHub Actions）：
-- 已配置在每次 `push` / `pull_request` 自动运行同一套测试：`.github/workflows/go-test.yml`
+---
 
-## 提交前自动测试（Git hooks）
+## 📚 文档导航
 
-如果你希望每次 `git commit` 都自动跑测试（失败则阻止提交），先在仓库根目录执行一次：
+- `docs/plan.md`：总体方案
+- `docs/runbook.md`：上线运行手册
+- `docs/admin-guide.md`：管理员手册
+- `docs/user-guide.md`：用户手册
+- `docs/go-live-checklist.md`：上线检查项
 
-```bash
-bash "scripts/install-githooks.sh"
-```
+---
 
-说明：
-- 安装后，每次提交会自动执行：`go test ./controller/... ./node-agent/...`
-- 如需临时跳过（不推荐常用）：`git commit --no-verify`
+## 🗂️ 目录结构
 
-## 构建与部署（生产）
-
-- 构建 Linux 二进制：`scripts/build_linux.sh`（输出到 `bin/`，可配 `GOARCH=arm64`）
-- 部署控制器：`scripts/deploy_controller.sh`（示例）
-- 部署 Agent：`scripts/deploy_agent.sh`（示例）
-- 部署 Hook：`scripts/deploy_hook.sh`（示例）
-
-## 前端开发（Vue3）
-
-前端位于 `web/`，使用 `pnpm` 管理依赖：
-
-```bash
-cd web
-pnpm install
-pnpm dev
-```
-
-构建产物输出到 `web/dist/`，控制器会自动托管（访问 `http://<controller>/`）。
-
-## 目录结构
-
-与 `docs/plan.md` 保持一致（核心实现已落地）：
-
-```
+```text
 hit-aiot-ops/
-├── node-agent/
-├── controller/
-├── database/
-├── tools/
-├── scripts/
-├── config/
-├── systemd/
-└── docs/
+├── controller/      # 控制器
+├── node-agent/      # 节点 Agent
+├── web/             # 前端
+├── database/        # schema + migrations
+├── scripts/         # 部署/运维脚本
+├── tools/           # 用户侧工具
+├── config/          # 配置
+├── systemd/         # service 示例
+└── docs/            # 文档
 ```
