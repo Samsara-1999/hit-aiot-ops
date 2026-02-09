@@ -136,20 +136,34 @@ go run .
 
 `AGENT_TOKEN` 必须与 `config/controller.yaml` 的 `agent_token` 一致。
 
+计算节点本地安装时，推荐用“一条命令”启动（避免代理导致下载超时）：
+
+```bash
+cd /home/<用户名>/hit-aiot-ops/node-agent
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
+GOPROXY=https://goproxy.cn,direct \
+GOSUMDB=sum.golang.google.cn \
+GO111MODULE=on \
+NODE_ID=60001 \
+CONTROLLER_URL=http://192.168.1.244:8000 \
+AGENT_TOKEN=<agent_token> \
+go run .
+```
+
 ---
 
 ## 🔁 日常启动（开发环境）
 
 ```bash
-# 1) 数据库
+# 1) 控制端：数据库
 cd /home/baojh/hit-aiot-ops
 docker-compose up -d
 
-# 2) 控制器
+# 2) 控制端：控制器
 cd /home/baojh/hit-aiot-ops/controller
 go run . --config ../config/controller.yaml
 
-# 3) Agent（如未用 systemd 托管）
+# 3) 节点端：Agent（如未用 systemd 托管）
 cd /home/baojh/hit-aiot-ops/node-agent
 NODE_ID=60000 CONTROLLER_URL=http://127.0.0.1:8000 AGENT_TOKEN=<agent_token> go run .
 ```
@@ -159,6 +173,30 @@ NODE_ID=60000 CONTROLLER_URL=http://127.0.0.1:8000 AGENT_TOKEN=<agent_token> go 
 ---
 
 ## 🧩 计算节点部署（Ubuntu 22.04，支持 sudo）
+
+### 🎯 单点部署方案（推荐给手工安装场景）
+
+适用场景：你已经 SSH 到某一台计算节点，想本地安装并启动，不依赖批量远程脚本。
+
+```bash
+cd /home/<用户名>/hit-aiot-ops
+NODE_ID=60001 \
+CONTROLLER_URL=http://<控制器IP>:8000 \
+AGENT_TOKEN=<config/controller.yaml里的agent_token> \
+bash scripts/install_agent_local.sh
+```
+
+说明：
+- 该脚本会自动处理：依赖安装、Go 源配置、代理清理、本地编译、systemd 安装与启动。
+- 默认会先做控制器健康检查（`/healthz`），失败会阻止安装并给出错误。
+
+如需跳过依赖安装或健康检查：
+
+```bash
+INSTALL_DEPS=0 SKIP_CONTROLLER_HEALTHCHECK=1 \
+NODE_ID=60001 CONTROLLER_URL=http://<控制器IP>:8000 AGENT_TOKEN=<agent_token> \
+bash scripts/install_agent_local.sh
+```
 
 ### 🛠️ 1) 在控制器机编译 agent
 
@@ -202,6 +240,45 @@ bash scripts/deploy_agent.sh
 sudo systemctl status gpu-node-agent
 sudo journalctl -u gpu-node-agent -n 100 --no-pager
 ```
+
+### 🚨 常见错误：`connect: connection refused`
+
+示例：
+
+```text
+[node-agent] tick 异常：Post "http://192.168.1.244:8000/api/metrics": dial tcp 192.168.1.244:8000: connect: connection refused
+```
+
+这通常表示“控制器地址可达，但 8000 端口没有监听”。
+
+按顺序检查：
+
+1. 控制器进程是否在跑：
+
+```bash
+ps -ef | grep '[c]ontroller'
+```
+
+2. 控制器是否监听 8000 端口：
+
+```bash
+ss -lntp | grep 8000
+```
+
+3. `config/controller.yaml` 的监听地址是否对外开放。  
+如果是 `listen_addr: "127.0.0.1:8000"`，外部节点无法连接，应改为：
+
+```yaml
+listen_addr: "0.0.0.0:8000"
+```
+
+4. 在节点上测试健康检查：
+
+```bash
+curl -sS http://192.168.1.244:8000/healthz
+```
+
+5. 检查防火墙/安全组是否放行 `8000/tcp`。
 
 ---
 
